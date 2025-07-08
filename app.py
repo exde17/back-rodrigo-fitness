@@ -100,6 +100,35 @@ def obtener_asistencias(current_user: dict = Depends(get_current_user)):
     conn.close()
     return results
 
+@app.get("/actividades/mis-actividades")
+def obtener_mis_actividades(current_user: dict = Depends(get_current_user)):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Obtener el user_id del token
+        user_id = current_user["user_id"]
+        
+        query = """
+        SELECT id, "motivoCancelado", fecha, hora, created_at, updated_at, estado, descripcion, "checkAsistencia", "userId", "parqueId", "tipoActividadId"
+        FROM public.actividade
+        WHERE "userId" = %s AND estado = false
+        """
+        
+        cur.execute(query, (user_id,))
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        return {
+            "actividades": results,
+            "total": len(results),
+            "usuario_id": user_id
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener actividades: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -169,6 +198,50 @@ def contar_usuarios(current_user: dict = Depends(get_current_user)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al contar usuarios: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/asistencias/count-detalle/{actividad_id}")
+def contar_asistencias_con_detalle(actividad_id: str, current_user: dict = Depends(get_current_user)):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta para obtener detalles de la actividad y contar asistencias
+        cur.execute("""
+            SELECT 
+                act.id,
+                act.descripcion,
+                act.fecha,
+                act.hora,
+                act.estado,
+                COUNT(a.id) as total_asistencias
+            FROM public.actividade act
+            LEFT JOIN public.asistencia a ON a."actividadId" = act.id
+            WHERE act.id = %s
+            GROUP BY act.id, act.descripcion, act.fecha, act.hora, act.estado
+        """, (actividad_id,))
+        
+        result = cur.fetchone()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Actividad no encontrada")
+        
+        actividad_id, descripcion, fecha, hora, estado, total_asistencias = result
+        
+        return {
+            "actividad": {
+                "id": actividad_id,
+                "descripcion": descripcion,
+                "fecha": fecha,
+                "hora": hora,
+                "estado": estado
+            },
+            "total_asistencias": total_asistencias,
+            "message": f"La actividad '{descripcion}' tiene {total_asistencias} asistencias registradas"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener información: {str(e)}")
     finally:
         cur.close()
         conn.close()
