@@ -20,7 +20,8 @@ app.add_middleware(
 )
 
 # Load env
-load_dotenv()
+#load_dotenv()
+load_dotenv(dotenv_path="env")
 SECRET_KEY = os.getenv("JWT_SECRET")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
@@ -144,6 +145,30 @@ def login(input: LoginInput):
             "usuario": usuario,
             "roles": roles
         }
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/usuarios/count")
+def contar_usuarios(current_user: dict = Depends(get_current_user)):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta para contar usuarios activos
+        cur.execute("""
+            SELECT COUNT(*) as total_usuarios
+            FROM security.users
+            WHERE is_active = TRUE
+        """)
+        result = cur.fetchone()
+        total_usuarios = result[0] if result else 0
+        
+        return {
+            "total_usuarios": total_usuarios,
+            "message": f"Total de usuarios activos: {total_usuarios}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al contar usuarios: {str(e)}")
     finally:
         cur.close()
         conn.close()
