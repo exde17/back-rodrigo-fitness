@@ -441,5 +441,93 @@ def obtener_asistencias_por_genero(
         cur.close()
         conn.close()
 
+@app.get("/asistencias/por-edad-completo")
+def obtener_asistencias_por_edad_completo(
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    fecha_especifica: str = None,
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta simplificada
+        base_query = """
+        SELECT 
+            CASE 
+                WHEN dg.birth_date IS NULL THEN 'Sin fecha de nacimiento'
+                WHEN EXTRACT(YEAR FROM AGE(CURRENT_DATE, dg.birth_date)) < 18 THEN 'Menor de 18'
+                WHEN EXTRACT(YEAR FROM AGE(CURRENT_DATE, dg.birth_date)) BETWEEN 18 AND 25 THEN '18-25 años'
+                WHEN EXTRACT(YEAR FROM AGE(CURRENT_DATE, dg.birth_date)) BETWEEN 26 AND 35 THEN '26-35 años'
+                WHEN EXTRACT(YEAR FROM AGE(CURRENT_DATE, dg.birth_date)) BETWEEN 36 AND 45 THEN '36-45 años'
+                WHEN EXTRACT(YEAR FROM AGE(CURRENT_DATE, dg.birth_date)) BETWEEN 46 AND 55 THEN '46-55 años'
+                WHEN EXTRACT(YEAR FROM AGE(CURRENT_DATE, dg.birth_date)) BETWEEN 56 AND 65 THEN '56-65 años'
+                WHEN EXTRACT(YEAR FROM AGE(CURRENT_DATE, dg.birth_date)) > 65 THEN '66+ años'
+                ELSE 'Edad no válida'
+            END as rango_edad,
+            COUNT(a.id) as total_asistencias
+        FROM public.asistencia a
+        LEFT JOIN public.datos_generales dg ON dg.document_number = a.documento
+        JOIN public.actividade act ON act.id = a."actividadId"
+        WHERE act.estado = true
+        """
+        
+        conditions = []
+        params = []
+        
+        # Filtros de fecha
+        if fecha_especifica:
+            conditions.append("a.fecha = %s")
+            params.append(fecha_especifica)
+        elif fecha_inicio and fecha_fin:
+            conditions.append("a.fecha BETWEEN %s AND %s")
+            params.extend([fecha_inicio, fecha_fin])
+        elif fecha_inicio:
+            conditions.append("a.fecha >= %s")
+            params.append(fecha_inicio)
+        elif fecha_fin:
+            conditions.append("a.fecha <= %s")
+            params.append(fecha_fin)
+        
+        if conditions:
+            base_query += " AND " + " AND ".join(conditions)
+        
+        base_query += """
+        GROUP BY 1
+        ORDER BY 2 DESC
+        """
+        
+        cur.execute(base_query, params)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        # Calcular totales generales
+        total_asistencias = sum(r['total_asistencias'] for r in results)
+        
+        # Calcular porcentajes
+        for result in results:
+            if total_asistencias > 0:
+                result['porcentaje_asistencias'] = round((result['total_asistencias'] / total_asistencias) * 100, 2)
+            else:
+                result['porcentaje_asistencias'] = 0
+        
+        return {
+            "asistencias_por_edad": results,
+            "estadisticas_generales": {
+                "total_asistencias": total_asistencias,
+                "total_rangos_edad": len(results)
+            },
+            "filtros": {
+                "fecha_inicio": fecha_inicio,
+                "fecha_fin": fecha_fin,
+                "fecha_especifica": fecha_especifica
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener asistencias por edad: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
 
 
