@@ -246,3 +246,59 @@ def contar_asistencias_con_detalle(actividad_id: str, current_user: dict = Depen
         cur.close()
         conn.close()
 
+#traer parques
+@app.get("/parques")
+def obtener_parques(
+    nombre: str = None, 
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta base para parques activos con información del barrio
+        if nombre:
+            # Filtrar por nombre (búsqueda parcial, insensible a mayúsculas)
+            query = """
+            SELECT 
+                p.id,
+                p.nombre AS parque_nombre,
+                p."barrioId",
+                b.nombre AS barrio_nombre
+            FROM public.parque p
+            JOIN public.barrio b ON b.id = p."barrioId"
+            WHERE p.estado = true 
+              AND LOWER(p.nombre) LIKE LOWER(%s)
+            ORDER BY p.nombre ASC
+            """
+            cur.execute(query, (f"%{nombre}%",))
+        else:
+            # Traer todos los parques activos
+            query = """
+            SELECT 
+                p.id,
+                p.nombre AS parque_nombre,
+                p."barrioId",
+                b.nombre AS barrio_nombre
+            FROM public.parque p
+            JOIN public.barrio b ON b.id = p."barrioId"
+            WHERE p.estado = true
+            ORDER BY p.nombre ASC
+            """
+            cur.execute(query)
+        
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        return {
+            "parques": results,
+            "total": len(results),
+            "filtro_nombre": nombre if nombre else "sin filtro"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener parques: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+
+
