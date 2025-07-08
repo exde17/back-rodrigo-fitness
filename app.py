@@ -529,5 +529,224 @@ def obtener_asistencias_por_edad_completo(
         cur.close()
         conn.close()
 
+@app.get("/monitores")
+def obtener_monitores(current_user: dict = Depends(get_current_user)):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta para obtener monitores con datos completos
+        query = """
+        SELECT 
+            u.id as user_id,
+            u.usuario,
+            u.email,
+            dg.first_name,
+            u.role,
+            dg.document_number,
+            dg.gender::text as gender
+        FROM security.users u
+        INNER JOIN public.datos_generales dg ON dg."userId" = u.id
+        WHERE 'monitor' = ANY(u.role)
+          AND u.is_active = true
+        """
+        
+        cur.execute(query)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        return {
+            "monitores": results,
+            "total": len(results),
+            "message": f"Se encontraron {len(results)} monitores activos con datos completos"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener monitores: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/monitores/basico")
+def obtener_monitores_basico(current_user: dict = Depends(get_current_user)):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta simplificada con solo los campos solicitados
+        query = """
+        SELECT 
+            u.id as user_id,
+            dg.first_name,
+            dg.document_number
+        FROM security.users u
+        INNER JOIN public.datos_generales dg ON dg."userId" = u.id
+        WHERE 'monitor' = ANY(u.role)
+          AND u.is_active = true
+        ORDER BY dg.first_name ASC
+        """
+        
+        cur.execute(query)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        return {
+            "monitores": results,
+            "total": len(results)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener monitores básico: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/monitores/{user_id}")
+def obtener_monitor_por_id(user_id: str, current_user: dict = Depends(get_current_user)):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta para obtener un monitor específico con datos completos
+        query = """
+        SELECT 
+            u.id as user_id,
+            u.usuario,
+            u.email,
+            u.role,
+            u.is_active,
+            u.created_at,
+            dg.first_name,
+            dg.last_name,
+            dg.document_number,
+            dg.phone_number,
+            dg.gender::text as gender,
+            dg.birth_date,
+            dg.address,
+            dg.email as datos_email
+        FROM security.users u
+        INNER JOIN public.datos_generales dg ON dg."userId" = u.id
+        WHERE u.id = %s
+          AND 'monitor' = ANY(u.role)
+          AND u.is_active = true
+        """
+        
+        cur.execute(query, (user_id,))
+        columns = [desc[0] for desc in cur.description]
+        result = cur.fetchone()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Monitor no encontrado")
+        
+        monitor = dict(zip(columns, result))
+        
+        return {
+            "monitor": monitor,
+            "message": f"Monitor {monitor['first_name']} {monitor['last_name']} encontrado"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener monitor: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/monitores/search")
+def buscar_monitores(
+    nombre: str = None,
+    documento: str = None,
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta base con JOIN obligatorio
+        base_query = """
+        SELECT 
+            u.id as user_id,
+            u.usuario,
+            dg.first_name,
+            dg.last_name,
+            dg.document_number,
+            dg.phone_number,
+            dg.gender::text as gender
+        FROM security.users u
+        INNER JOIN public.datos_generales dg ON dg."userId" = u.id
+        WHERE 'monitor' = ANY(u.role)
+          AND u.is_active = true
+        """
+        
+        conditions = []
+        params = []
+        
+        # Filtro por nombre (first_name o last_name)
+        if nombre:
+            conditions.append("(LOWER(dg.first_name) LIKE LOWER(%s) OR LOWER(dg.last_name) LIKE LOWER(%s))")
+            params.extend([f"%{nombre}%", f"%{nombre}%"])
+        
+        # Filtro por documento
+        if documento:
+            conditions.append("dg.document_number LIKE %s")
+            params.append(f"%{documento}%")
+        
+        # Añadir condiciones a la consulta
+        if conditions:
+            base_query += " AND " + " AND ".join(conditions)
+        
+        base_query += " ORDER BY dg.first_name ASC, dg.last_name ASC"
+        
+        cur.execute(base_query, params)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        return {
+            "monitores": results,
+            "total": len(results),
+            "filtros": {
+                "nombre": nombre,
+                "documento": documento
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al buscar monitores: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/monitores/con-actividades")
+def obtener_monitores_con_actividades(current_user: dict = Depends(get_current_user)):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta para obtener monitores con sus estadísticas de actividades
+        query = """
+        SELECT 
+            u.id as user_id,
+            u.usuario,
+            dg.first_name,
+            dg.last_name,
+            dg.document_number,
+            dg.phone_number,
+            COUNT(act.id) as total_actividades,
+            COUNT(CASE WHEN act.estado = true THEN 1 END) as actividades_activas,
+            COUNT(CASE WHEN act.estado = false THEN 1 END) as actividades_inactivas
+        FROM security.users u
+        INNER JOIN public.datos_generales dg ON dg."userId" = u.id
+        LEFT JOIN public.actividade act ON act."userId" = u.id
+        WHERE 'monitor' = ANY(u.role)
+          AND u.is_active = true
+        GROUP BY u.id, u.usuario, dg.first_name, dg.last_name, dg.document_number, dg.phone_number
+        ORDER BY total_actividades DESC, dg.first_name ASC
+        """
+        
+        cur.execute(query)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        return {
+            "monitores_con_actividades": results,
+            "total": len(results),
+            "message": f"Se encontraron {len(results)} monitores con estadísticas de actividades"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener monitores con actividades: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
 
 
