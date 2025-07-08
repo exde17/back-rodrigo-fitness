@@ -362,5 +362,84 @@ def contar_asistencias_por_parque(
         cur.close()
         conn.close()
 
+@app.get("/asistencias/por-genero")
+def obtener_asistencias_por_genero(
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    fecha_especifica: str = None,
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta simplificada sin usuarios_unicos
+        base_query = """
+        SELECT 
+            dg.gender::text as genero_normalizado,
+            COUNT(a.id) as total_asistencias
+        FROM public.asistencia a
+        JOIN public.datos_generales dg ON dg.document_number = a.documento
+        JOIN public.actividade act ON act.id = a."actividadId"
+        WHERE act.estado = true
+          AND dg.gender IS NOT NULL
+        """
+        
+        conditions = []
+        params = []
+        
+        # Filtros de fecha
+        if fecha_especifica:
+            conditions.append("a.fecha = %s")
+            params.append(fecha_especifica)
+        elif fecha_inicio and fecha_fin:
+            conditions.append("a.fecha BETWEEN %s AND %s")
+            params.extend([fecha_inicio, fecha_fin])
+        elif fecha_inicio:
+            conditions.append("a.fecha >= %s")
+            params.append(fecha_inicio)
+        elif fecha_fin:
+            conditions.append("a.fecha <= %s")
+            params.append(fecha_fin)
+        
+        if conditions:
+            base_query += " AND " + " AND ".join(conditions)
+        
+        base_query += """
+        GROUP BY dg.gender::text
+        ORDER BY total_asistencias DESC
+        """
+        
+        cur.execute(base_query, params)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        # Calcular totales generales
+        total_asistencias = sum(r['total_asistencias'] for r in results)
+        
+        # Calcular porcentajes
+        for result in results:
+            if total_asistencias > 0:
+                result['porcentaje_asistencias'] = round((result['total_asistencias'] / total_asistencias) * 100, 2)
+            else:
+                result['porcentaje_asistencias'] = 0
+        
+        return {
+            "asistencias_por_genero": results,
+            "estadisticas_generales": {
+                "total_asistencias": total_asistencias,
+                "total_generos": len(results)
+            },
+            "filtros": {
+                "fecha_inicio": fecha_inicio,
+                "fecha_fin": fecha_fin,
+                "fecha_especifica": fecha_especifica
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener asistencias por género: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
 
 
