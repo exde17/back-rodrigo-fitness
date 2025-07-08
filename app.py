@@ -245,3 +245,4 @@ def contar_asistencias_con_detalle(actividad_id: str, current_user: dict = Depen
     finally:
         cur.close()
         conn.close()
+
