@@ -300,5 +300,67 @@ def obtener_parques(
         cur.close()
         conn.close()
 
+@app.get("/asistencias/count-por-parque")
+def contar_asistencias_por_parque(
+    parque_id: str = None,
+    fecha_inicio: str = None,  # Formato: 2025-05-14
+    fecha_fin: str = None,     # Formato: 2025-05-14
+    fecha_especifica: str = None,  # Formato: 2025-05-14
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta para contar asistencias
+        base_query = """
+        SELECT COUNT(a.id) as total_asistencias
+        FROM public.asistencia a
+        JOIN public.actividade act ON act.id = a."actividadId"
+        JOIN public.parque p ON p.id = act."parqueId"
+        WHERE act.estado = true AND p.estado = true
+        """
+        
+        conditions = []
+        params = []
+        
+        # Filtro por parque específico
+        if parque_id:
+            conditions.append("p.id = %s")
+            params.append(parque_id)
+        
+        # Filtro por fecha específica
+        if fecha_especifica:
+            conditions.append("a.fecha = %s")
+            params.append(fecha_especifica)
+        # Filtro por rango de fechas
+        elif fecha_inicio and fecha_fin:
+            conditions.append("a.fecha BETWEEN %s AND %s")
+            params.extend([fecha_inicio, fecha_fin])
+        # Solo fecha inicio
+        elif fecha_inicio:
+            conditions.append("a.fecha >= %s")
+            params.append(fecha_inicio)
+        # Solo fecha fin
+        elif fecha_fin:
+            conditions.append("a.fecha <= %s")
+            params.append(fecha_fin)
+        
+        # Añadir condiciones a la consulta
+        if conditions:
+            base_query += " AND " + " AND ".join(conditions)
+        
+        cur.execute(base_query, params)
+        result = cur.fetchone()
+        total_asistencias = result[0] if result else 0
+        
+        return {
+            "total_asistencias": total_asistencias
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al contar asistencias: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
 
 
