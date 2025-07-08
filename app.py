@@ -111,7 +111,7 @@ def obtener_mis_actividades(current_user: dict = Depends(get_current_user)):
         query = """
         SELECT id, "motivoCancelado", fecha, hora, created_at, updated_at, estado, descripcion, "checkAsistencia", "userId", "parqueId", "tipoActividadId"
         FROM public.actividade
-        WHERE "userId" = %s AND estado = false
+        WHERE "userId" = %s AND estado = true
         """
         
         cur.execute(query, (user_id,))
