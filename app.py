@@ -20,8 +20,8 @@ app.add_middleware(
 )
 
 # Load env
-#load_dotenv()
-load_dotenv(dotenv_path="env")
+load_dotenv()
+#load_dotenv(dotenv_path="env")
 SECRET_KEY = os.getenv("JWT_SECRET")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
