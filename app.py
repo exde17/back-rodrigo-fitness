@@ -748,5 +748,232 @@ def obtener_monitores_con_actividades(current_user: dict = Depends(get_current_u
         cur.close()
         conn.close()
 
+# estadisticas monitores
+
+@app.get("/monitores/actividades-canceladas/{user_id}")
+def obtener_actividades_canceladas_monitor(
+    user_id: str, 
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta para obtener actividades canceladas de un monitor específico
+        query = """
+        SELECT 
+            act.id,
+            act.descripcion,
+            act.fecha,
+            act.hora,
+            act."motivoCancelado",
+            act.created_at,
+            act.updated_at,
+            act.estado,
+            ta.nombre as tipo_actividad,
+            p.nombre as parque_nombre,
+            b.nombre as barrio_nombre,
+            c.nombre as comuna_nombre,
+            dg.first_name as monitor_nombre,
+            dg.document_number as monitor_documento
+        FROM public.actividade act
+        INNER JOIN security.users u ON u.id = act."userId"
+        INNER JOIN public.datos_generales dg ON dg."userId" = u.id
+        LEFT JOIN public.tipo_actividad ta ON ta.id = act."tipoActividadId"
+        LEFT JOIN public.parque p ON p.id = act."parqueId"
+        LEFT JOIN public.barrio b ON b.id = p."barrioId"
+        LEFT JOIN public.comuna_corregimiento c ON c.id = b."comunaCorregimientoId"
+        WHERE act."userId" = %s
+          AND act.estado = false
+          AND 'monitor' = ANY(u.role)
+          AND u.is_active = true
+        ORDER BY act.fecha DESC, act.hora DESC
+        """
+        
+        cur.execute(query, (user_id,))
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        # Verificar si el monitor existe
+        if not results:
+            # Verificar si el usuario existe y es monitor
+            cur.execute("""
+                SELECT u.id, dg.first_name
+                FROM security.users u
+                LEFT JOIN public.datos_generales dg ON dg."userId" = u.id
+                WHERE u.id = %s AND 'monitor' = ANY(u.role) AND u.is_active = true
+            """, (user_id,))
+            
+            monitor_exists = cur.fetchone()
+            if not monitor_exists:
+                raise HTTPException(status_code=404, detail="Monitor no encontrado")
+        
+        return {
+            "actividades_canceladas": results,
+            "total": len(results),
+            "monitor_id": user_id,
+            "message": f"Se encontraron {len(results)} actividades canceladas"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener actividades canceladas: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/monitores/estadisticas-actividades/{user_id}")
+def obtener_estadisticas_actividades_monitor(
+    user_id: str, 
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta para obtener estadísticas completas de actividades del monitor
+        query = """
+        SELECT 
+            COUNT(*) as total_actividades,
+            COUNT(CASE WHEN estado = true THEN 1 END) as actividades_activas,
+            COUNT(CASE WHEN estado = false THEN 1 END) as actividades_canceladas,
+            dg.first_name,
+            dg.document_number
+        FROM public.actividade act
+        INNER JOIN security.users u ON u.id = act."userId"
+        INNER JOIN public.datos_generales dg ON dg."userId" = u.id
+        WHERE act."userId" = %s
+          AND 'monitor' = ANY(u.role)
+          AND u.is_active = true
+        GROUP BY dg.first_name, dg.document_number
+        """
+        
+        cur.execute(query, (user_id,))
+        result = cur.fetchone()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Monitor no encontrado")
+        
+        total, activas, canceladas, nombre, documento = result
+        
+        return {
+            "monitor": {
+                "user_id": user_id,
+                "nombre": nombre,
+                "documento": documento
+            },
+            "estadisticas": {
+                "total_actividades": total,
+                "actividades_activas": activas,
+                "actividades_canceladas": canceladas,
+                "porcentaje_canceladas": round((canceladas / total * 100), 2) if total > 0 else 0
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener estadísticas: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+# promedio de actividades
+
+@app.get("/monitores/calificaciones-promedio/{user_id}")
+def obtener_promedio_calificaciones_monitor(
+    user_id: str, 
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta para obtener promedio de calificaciones por actividad del monitor
+        query = """
+        SELECT 
+            act.id as actividad_id,
+            act.descripcion,
+            act.fecha,
+            act.hora,
+            act.estado,
+            ta.nombre as tipo_actividad,
+            p.nombre as parque_nombre,
+            COUNT(c.id) as total_calificaciones,
+            ROUND(AVG(c.calificacion), 2) as promedio_calificacion,
+            MIN(c.calificacion) as calificacion_minima,
+            MAX(c.calificacion) as calificacion_maxima,
+            dg.first_name as monitor_nombre,
+            dg.document_number as monitor_documento
+        FROM public.actividade act
+        INNER JOIN security.users u ON u.id = act."userId"
+        INNER JOIN public.datos_generales dg ON dg."userId" = u.id
+        LEFT JOIN public.tipo_actividad ta ON ta.id = act."tipoActividadId"
+        LEFT JOIN public.parque p ON p.id = act."parqueId"
+        LEFT JOIN public.calificacion c ON c."actividadId" = act.id
+        WHERE act."userId" = %s
+          AND 'monitor' = ANY(u.role)
+          AND u.is_active = true
+        GROUP BY 
+            act.id, act.descripcion, act.fecha, act.hora, act.estado,
+            ta.nombre, p.nombre, dg.first_name, dg.document_number
+        ORDER BY act.fecha DESC, act.hora DESC
+        """
+        
+        cur.execute(query, (user_id,))
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        # Verificar si el monitor existe
+        if not results:
+            # Verificar si el usuario existe y es monitor
+            cur.execute("""
+                SELECT u.id, dg.first_name, dg.document_number
+                FROM security.users u
+                LEFT JOIN public.datos_generales dg ON dg."userId" = u.id
+                WHERE u.id = %s AND 'monitor' = ANY(u.role) AND u.is_active = true
+            """, (user_id,))
+            
+            monitor_exists = cur.fetchone()
+            if not monitor_exists:
+                raise HTTPException(status_code=404, detail="Monitor no encontrado")
+            
+            # El monitor existe pero no tiene actividades
+            return {
+                "actividades_con_calificaciones": [],
+                "total_actividades": 0,
+                "monitor_id": user_id,
+                "monitor_nombre": monitor_exists[1],
+                "monitor_documento": monitor_exists[2],
+                "message": "El monitor no tiene actividades registradas"
+            }
+        
+        # Filtrar solo actividades que tienen calificaciones
+        actividades_con_calificaciones = [r for r in results if r['total_calificaciones'] > 0]
+        
+        # Calcular estadísticas generales
+        if actividades_con_calificaciones:
+            promedio_general = round(
+                sum(r['promedio_calificacion'] * r['total_calificaciones'] for r in actividades_con_calificaciones) /
+                sum(r['total_calificaciones'] for r in actividades_con_calificaciones), 2
+            )
+            total_calificaciones_general = sum(r['total_calificaciones'] for r in actividades_con_calificaciones)
+        else:
+            promedio_general = 0
+            total_calificaciones_general = 0
+        
+        return {
+            "actividades_con_calificaciones": actividades_con_calificaciones,
+            "total_actividades": len(results),
+            "actividades_calificadas": len(actividades_con_calificaciones),
+            "monitor_id": user_id,
+            "monitor_nombre": results[0]['monitor_nombre'] if results else None,
+            "monitor_documento": results[0]['monitor_documento'] if results else None,
+            "estadisticas_generales": {
+                "promedio_general": promedio_general,
+                "total_calificaciones": total_calificaciones_general,
+                "actividades_sin_calificar": len(results) - len(actividades_con_calificaciones)
+            },
+            "message": f"Se encontraron {len(actividades_con_calificaciones)} actividades con calificaciones"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener calificaciones: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+
 
 
