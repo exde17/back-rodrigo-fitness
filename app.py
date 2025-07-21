@@ -974,6 +974,99 @@ def obtener_promedio_calificaciones_monitor(
         cur.close()
         conn.close()
 
+@app.get("/caracterizacion-por-zona")
+def obtener_caracterizacion_por_zona(current_user: dict = Depends(get_current_user)):
+    """
+    Endpoint para obtener datos de la vista vista_caracterizacion_por_zona
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Consulta a la vista vista_caracterizacion_por_zona
+        query = """
+        SELECT * FROM vista_caracterizacion_por_zona
+        ORDER BY zona ASC
+        """
+        
+        cur.execute(query)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+        return {
+            "caracterizacion_por_zona": results,
+            "total": len(results),
+            "message": f"Se encontraron {len(results)} registros de caracterización por zona"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener caracterización por zona: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+# @app.get("/caracterizacion-por-zona/filtrada")
+# def obtener_caracterizacion_por_zona_filtrada(
+#     zona: str = None,
+#     fecha_inicio: str = None,
+#     fecha_fin: str = None,
+#     current_user: dict = Depends(get_current_user)
+# ):
+#     """
+#     Endpoint para obtener datos filtrados de la vista vista_caracterizacion_por_zona
+#     """
+#     conn = get_connection()
+#     cur = conn.cursor()
+#     try:
+#         # Consulta base a la vista
+#         base_query = """
+#         SELECT * FROM vista_caracterizacion_por_zona
+#         WHERE 1=1
+#         """
+        
+#         conditions = []
+#         params = []
+        
+#         # Filtro por zona
+#         if zona:
+#             conditions.append("LOWER(zona) LIKE LOWER(%s)")
+#             params.append(f"%{zona}%")
+        
+#         # Filtros de fecha (asumiendo que existe una columna de fecha en la vista)
+#         if fecha_inicio and fecha_fin:
+#             conditions.append("fecha BETWEEN %s AND %s")
+#             params.extend([fecha_inicio, fecha_fin])
+#         elif fecha_inicio:
+#             conditions.append("fecha >= %s")
+#             params.append(fecha_inicio)
+#         elif fecha_fin:
+#             conditions.append("fecha <= %s")
+#             params.append(fecha_fin)
+        
+#         # Añadir condiciones a la consulta
+#         if conditions:
+#             base_query += " AND " + " AND ".join(conditions)
+        
+#         base_query += " ORDER BY zona ASC"
+        
+#         cur.execute(base_query, params)
+#         columns = [desc[0] for desc in cur.description]
+#         results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        
+#         return {
+#             "caracterizacion_por_zona": results,
+#             "total": len(results),
+#             "filtros": {
+#                 "zona": zona,
+#                 "fecha_inicio": fecha_inicio,
+#                 "fecha_fin": fecha_fin
+#             },
+#             "message": f"Se encontraron {len(results)} registros con los filtros aplicados"
+#         }
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Error al obtener caracterización filtrada: {str(e)}")
+#     finally:
+#         cur.close()
+#         conn.close()
+
 
 
 
