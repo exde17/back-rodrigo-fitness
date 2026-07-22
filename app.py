@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://fitness-dash.celenius.store", "http://localhost:5173","https://frontfitnessdashboard.onrender.com", "https://dashboard-fitness-m.vercel.app"],
+    allow_origins=["https://desarrollo.webvivefit.online", "https://fitness-dash.celenius.store", "http://localhost:5173","https://frontfitnessdashboard.onrender.com", "https://dashboard-fitness-m.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
