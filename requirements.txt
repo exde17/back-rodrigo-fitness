@@ -5,9 +5,11 @@ cffi==1.17.1
 click==8.2.1
 cryptography==45.0.2
 ecdsa==0.19.1
+et-xmlfile==2.0.0
 fastapi==0.115.12
 h11==0.16.0
 idna==3.10
+openpyxl==3.1.5
 passlib==1.7.4
 psycopg2-binary==2.9.10
 pyasn1==0.4.8

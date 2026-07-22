@@ -1,10 +1,13 @@
-from fastapi import FastAPI, HTTPException, Depends, status, Form
+from fastapi import FastAPI, HTTPException, Depends, status, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
+from openpyxl import Workbook
+import io
 import psycopg2
 import os
 from dotenv import load_dotenv
@@ -41,7 +44,7 @@ from fastapi import Request
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
-def get_current_user(token: str = Depends(oauth2_scheme)):
+def decode_access_token(token: str) -> dict:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="No autenticado",
@@ -61,6 +64,32 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         }
     except JWTError:
         raise credentials_exception
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    return decode_access_token(token)
+
+# Los enlaces de descarga (<a href>) no pueden enviar el header Authorization,
+# así que los endpoints de exportación a Excel reciben el token por query param.
+def get_current_user_desde_query(token: str = Query(...)):
+    return decode_access_token(token)
+
+def generar_excel_response(filas: list, columnas: list[tuple[str, str]], nombre_archivo: str) -> StreamingResponse:
+    """columnas: lista de (encabezado, clave_en_fila)"""
+    wb = Workbook()
+    ws = wb.active
+    ws.append([encabezado for encabezado, _ in columnas])
+    for fila in filas:
+        ws.append([fila.get(clave) for _, clave in columnas])
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nombre_archivo}"'},
+    )
 
 @app.get("/asistencias")
 def obtener_asistencias(current_user: dict = Depends(get_current_user)):
@@ -361,6 +390,292 @@ def contar_asistencias_por_parque(
     finally:
         cur.close()
         conn.close()
+
+@app.get("/asistencias/por-comuna")
+def obtener_asistencias_por_comuna(
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        base_query = """
+        SELECT
+            c.nombre AS comuna_actividad,
+            COUNT(a.id) AS total_asistencias
+        FROM public.asistencia a
+        JOIN public.actividade act ON act.id = a."actividadId"
+        JOIN public.parque p ON p.id = act."parqueId"
+        JOIN public.barrio b ON b.id = p."barrioId"
+        JOIN public.comuna_corregimiento c ON c.id = b."comunaCorregimientoId"
+        WHERE act.estado = true
+        """
+
+        conditions = []
+        params = []
+
+        if fecha_inicio and fecha_fin:
+            conditions.append('a.fecha BETWEEN %s AND %s')
+            params.extend([fecha_inicio, fecha_fin])
+        elif fecha_inicio:
+            conditions.append('a.fecha >= %s')
+            params.append(fecha_inicio)
+        elif fecha_fin:
+            conditions.append('a.fecha <= %s')
+            params.append(fecha_fin)
+
+        if conditions:
+            base_query += " AND " + " AND ".join(conditions)
+
+        base_query += """
+        GROUP BY c.nombre
+        ORDER BY total_asistencias DESC
+        """
+
+        cur.execute(base_query, params)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+
+        return {
+            "asistencias_por_comuna": results,
+            "total_comunas": len(results),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener asistencias por comuna: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+def _condiciones_fecha(columna: str, fecha_inicio: str, fecha_fin: str):
+    conditions = []
+    params = []
+    if fecha_inicio and fecha_fin:
+        conditions.append(f"{columna} BETWEEN %s AND %s")
+        params.extend([fecha_inicio, fecha_fin])
+    elif fecha_inicio:
+        conditions.append(f"{columna} >= %s")
+        params.append(fecha_inicio)
+    elif fecha_fin:
+        conditions.append(f"{columna} <= %s")
+        params.append(fecha_fin)
+    return conditions, params
+
+@app.get("/reportes/medico")
+def reporte_medico(
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    formato: str = "json",
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        query = """
+        SELECT
+            pq.created_at AS fecha_aprobacion,
+            dg.first_name AS nombre,
+            dg.document_number AS documento,
+            dg.phone_number AS telefono,
+            dg.address AS direccion,
+            dg.gender::text AS sexo,
+            dg.birth_date AS fecha_nacimiento,
+            pq.observacion AS comentarios_medico,
+            pq.aprobado AS aprobado
+        FROM public.parq pq
+        JOIN public.datos_generales dg ON dg."userId" = pq."userId"
+        """
+        conditions, params = _condiciones_fecha("pq.created_at", fecha_inicio, fecha_fin)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY pq.created_at DESC"
+
+        cur.execute(query, params)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+
+        if formato == "excel":
+            for r in results:
+                r["aprobado"] = "Sí" if r["aprobado"] else "No"
+            columnas_excel = [
+                ("Fecha Aprobación", "fecha_aprobacion"),
+                ("Nombre", "nombre"),
+                ("Documento", "documento"),
+                ("Teléfono", "telefono"),
+                ("Dirección", "direccion"),
+                ("Sexo", "sexo"),
+                ("Fecha Nacimiento", "fecha_nacimiento"),
+                ("Comentarios Médico", "comentarios_medico"),
+                ("Aprobado", "aprobado"),
+            ]
+            return generar_excel_response(results, columnas_excel, "ReporteMedico.xlsx")
+
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener el reporte médico: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/reportes/medico/export/excel")
+def reporte_medico_excel(
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    current_user: dict = Depends(get_current_user_desde_query)
+):
+    return reporte_medico(fecha_inicio, fecha_fin, "excel", current_user)
+
+
+# Pregunta del cuestionario PARQ que corresponde al consentimiento informado.
+# La columna parq.consentimeinto nunca se escribe en el backend móvil (backFitness);
+# la firma real se registra como respuesta a esta pregunta en respuesta_parq.
+PREGUNTA_PARQ_CONSENTIMIENTO_ID = "79455ba5-2b19-4e7f-98d6-21dc468a357c"
+
+@app.get("/reportes/consentimiento")
+def reporte_consentimiento(
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    formato: str = "json",
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # Subconsulta: última respuesta de cada usuario a la pregunta de consentimiento
+        # (puede responderse más de una vez si retoma el cuestionario).
+        subquery = """
+            SELECT DISTINCT ON ("userId")
+                "userId",
+                created_at AS fecha_firma,
+                respuesta_parq AS firmo
+            FROM public.respuesta_parq
+            WHERE "preguntaParqId" = %s
+        """
+        params = [PREGUNTA_PARQ_CONSENTIMIENTO_ID]
+        sub_conditions, sub_params = _condiciones_fecha("created_at", fecha_inicio, fecha_fin)
+        if sub_conditions:
+            subquery += " AND " + " AND ".join(sub_conditions)
+            params.extend(sub_params)
+        subquery += ' ORDER BY "userId", created_at DESC'
+
+        # LEFT JOIN desde datos_generales: los usuarios que no han contestado la
+        # pregunta también aparecen en el reporte, marcados como "Pendiente".
+        query = f"""
+        SELECT
+            dg.first_name AS nombre,
+            dg.document_number AS documento,
+            dg.phone_number AS telefono,
+            dg.address AS direccion,
+            dg.gender::text AS sexo,
+            dg.contacto_emergencia AS contacto_emergencia,
+            rp.fecha_firma AS fecha_firma,
+            rp.firmo AS firmo_consentimiento
+        FROM public.datos_generales dg
+        LEFT JOIN ({subquery}) rp ON rp."userId" = dg."userId"
+        ORDER BY dg.first_name
+        """
+
+        cur.execute(query, params)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+
+        if formato == "excel":
+            for r in results:
+                if r["firmo_consentimiento"] is True:
+                    r["firmo_consentimiento"] = "Sí"
+                elif r["firmo_consentimiento"] is False:
+                    r["firmo_consentimiento"] = "No"
+                else:
+                    r["firmo_consentimiento"] = "Pendiente"
+            columnas_excel = [
+                ("Fecha Firma", "fecha_firma"),
+                ("Nombre", "nombre"),
+                ("Documento", "documento"),
+                ("Teléfono", "telefono"),
+                ("Dirección", "direccion"),
+                ("Sexo", "sexo"),
+                ("Contacto Emergencia", "contacto_emergencia"),
+                ("Firmó Consentimiento", "firmo_consentimiento"),
+            ]
+            return generar_excel_response(results, columnas_excel, "ReporteFirmaConsentimiento.xlsx")
+
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener el reporte de consentimiento: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/reportes/consentimiento/export/excel")
+def reporte_consentimiento_excel(
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    current_user: dict = Depends(get_current_user_desde_query)
+):
+    return reporte_consentimiento(fecha_inicio, fecha_fin, "excel", current_user)
+
+@app.get("/reportes/asistencia-camiseta")
+def reporte_asistencia_camiseta(
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    formato: str = "json",
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        query = """
+        SELECT
+            dg.first_name AS nombre,
+            dg.document_number AS documento,
+            dg.phone_number AS telefono,
+            dg.address AS direccion,
+            dg.gender::text AS sexo,
+            TO_CHAR(a.fecha, 'YYYY-MM') AS mes,
+            COUNT(a.id) AS asistencias_mes
+        FROM public.asistencia a
+        JOIN public.actividade act ON act.id = a."actividadId"
+        JOIN public.datos_generales dg ON dg.document_number = a.documento
+        WHERE act.estado = true
+        """
+        conditions, params = _condiciones_fecha("a.fecha", fecha_inicio, fecha_fin)
+        if conditions:
+            query += " AND " + " AND ".join(conditions)
+        query += """
+        GROUP BY dg.first_name, dg.document_number, dg.phone_number, dg.address, dg.gender, TO_CHAR(a.fecha, 'YYYY-MM')
+        ORDER BY dg.document_number, mes
+        """
+
+        cur.execute(query, params)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+
+        if formato == "excel":
+            columnas_excel = [
+                ("Nombre", "nombre"),
+                ("Documento", "documento"),
+                ("Teléfono", "telefono"),
+                ("Dirección", "direccion"),
+                ("Sexo", "sexo"),
+                ("Mes", "mes"),
+                ("Asistencias en el Mes", "asistencias_mes"),
+            ]
+            return generar_excel_response(results, columnas_excel, "ReporteAsistenciaCamiseta.xlsx")
+
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener el reporte de asistencia-camiseta: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/reportes/asistencia-camiseta/export/excel")
+def reporte_asistencia_camiseta_excel(
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    current_user: dict = Depends(get_current_user_desde_query)
+):
+    return reporte_asistencia_camiseta(fecha_inicio, fecha_fin, "excel", current_user)
 
 @app.get("/asistencias/por-genero")
 def obtener_asistencias_por_genero(

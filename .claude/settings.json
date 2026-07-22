@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git rm *)",
+      "Bash(timeout 8 ./.venv/Scripts/python.exe -m uvicorn app:app --port 8001)",
+      "Bash(./.venv/Scripts/python.exe -m uvicorn app:app --port 8001)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8001/docs)"
+    ]
+  }
+}
