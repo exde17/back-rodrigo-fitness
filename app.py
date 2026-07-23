@@ -624,25 +624,45 @@ def reporte_asistencia_camiseta(
     conn = get_connection()
     cur = conn.cursor()
     try:
-        query = """
+        # asistencias_filtradas: asistencias dentro del rango de fecha pedido.
+        # parque_top: por documento, el parque con más visitas dentro de ese rango
+        # (si asistió a varios, gana el de más asistencias; empate se rompe por parqueId).
+        subquery_asistencias = """
+            SELECT a.id, a.documento, a.fecha, act."parqueId"
+            FROM public.asistencia a
+            JOIN public.actividade act ON act.id = a."actividadId"
+            WHERE act.estado = true
+        """
+        conditions, params = _condiciones_fecha("a.fecha", fecha_inicio, fecha_fin)
+        if conditions:
+            subquery_asistencias += " AND " + " AND ".join(conditions)
+
+        query = f"""
+        WITH asistencias_filtradas AS (
+            {subquery_asistencias}
+        ),
+        parque_top AS (
+            SELECT documento, "parqueId", COUNT(*) AS visitas,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY documento ORDER BY COUNT(*) DESC, "parqueId"
+                   ) AS rn
+            FROM asistencias_filtradas
+            GROUP BY documento, "parqueId"
+        )
         SELECT
             dg.first_name AS nombre,
             dg.document_number AS documento,
             dg.phone_number AS telefono,
             dg.address AS direccion,
             dg.gender::text AS sexo,
-            TO_CHAR(a.fecha, 'YYYY-MM') AS mes,
-            COUNT(a.id) AS asistencias_mes
-        FROM public.asistencia a
-        JOIN public.actividade act ON act.id = a."actividadId"
-        JOIN public.datos_generales dg ON dg.document_number = a.documento
-        WHERE act.estado = true
-        """
-        conditions, params = _condiciones_fecha("a.fecha", fecha_inicio, fecha_fin)
-        if conditions:
-            query += " AND " + " AND ".join(conditions)
-        query += """
-        GROUP BY dg.first_name, dg.document_number, dg.phone_number, dg.address, dg.gender, TO_CHAR(a.fecha, 'YYYY-MM')
+            p.nombre AS parque_mas_frecuente,
+            TO_CHAR(af.fecha, 'YYYY-MM') AS mes,
+            COUNT(af.id) AS asistencias_mes
+        FROM asistencias_filtradas af
+        JOIN public.datos_generales dg ON dg.document_number = af.documento
+        LEFT JOIN parque_top pt ON pt.documento = af.documento AND pt.rn = 1
+        LEFT JOIN public.parque p ON p.id = pt."parqueId"
+        GROUP BY dg.first_name, dg.document_number, dg.phone_number, dg.address, dg.gender, p.nombre, TO_CHAR(af.fecha, 'YYYY-MM')
         ORDER BY dg.document_number, mes
         """
 
@@ -657,6 +677,7 @@ def reporte_asistencia_camiseta(
                 ("Teléfono", "telefono"),
                 ("Dirección", "direccion"),
                 ("Sexo", "sexo"),
+                ("Parque Más Frecuente", "parque_mas_frecuente"),
                 ("Mes", "mes"),
                 ("Asistencias en el Mes", "asistencias_mes"),
             ]
