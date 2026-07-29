@@ -129,6 +129,127 @@ def obtener_asistencias(current_user: dict = Depends(get_current_user)):
     conn.close()
     return results
 
+# JOIN base compartido por /asistencias/opciones-filtro y /asistencias/resumen-filtrado.
+# Es el mismo que usa /asistencias, pero aquí se filtra/agrega en SQL en vez de traer
+# el histórico completo (100k+ filas) al navegador.
+_ASISTENCIAS_JOIN_BASE = """
+    FROM security.users m
+    JOIN public.datos_generales dm ON dm."userId" = m.id
+    JOIN public.actividade act ON act."userId" = m.id
+    JOIN public.tipo_actividad ta ON ta.id = act."tipoActividadId"
+    JOIN public.parque p ON p.id = act."parqueId"
+    JOIN public.barrio b ON b.id = p."barrioId"
+    JOIN public.comuna_corregimiento c ON c.id = b."comunaCorregimientoId"
+    JOIN public.asistencia a ON a."actividadId" = act.id
+    JOIN public.datos_generales du ON du.document_number = a.documento
+    JOIN security.users u ON u.id = du."userId"
+    WHERE 'monitor' = ANY(m.role)
+        AND 'user' = ANY(u.role)
+        AND m.is_active = true
+        AND u.is_active = true
+"""
+
+def _condiciones_filtro_asistencias(zona: str, comuna: str, barrio: str, parque: str, tipo_actividad: str,
+                                     fecha_inicio: str, fecha_fin: str):
+    conditions = []
+    params = []
+    if zona == "urbano":
+        conditions.append("c.nombre ~ '^[0-9]+$'")
+    elif zona == "rural":
+        conditions.append("c.nombre !~ '^[0-9]+$'")
+    if comuna:
+        conditions.append("c.nombre = %s")
+        params.append(comuna)
+    if barrio:
+        conditions.append("b.nombre = %s")
+        params.append(barrio)
+    if parque:
+        conditions.append("p.nombre = %s")
+        params.append(parque)
+    if tipo_actividad:
+        conditions.append("ta.nombre = %s")
+        params.append(tipo_actividad)
+    fecha_conditions, fecha_params = _condiciones_fecha("a.fecha", fecha_inicio, fecha_fin)
+    conditions.extend(fecha_conditions)
+    params.extend(fecha_params)
+    return conditions, params
+
+@app.get("/asistencias/opciones-filtro")
+def obtener_opciones_filtro_asistencias(current_user: dict = Depends(get_current_user)):
+    """Valores únicos de comuna/barrio/parque/tipo de actividad para poblar los
+    dropdowns en cascada de la página de Asistencia, sin traer cada fila de asistencia."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        query = f"""
+        SELECT DISTINCT
+            c.nombre AS comuna_actividad,
+            b.nombre AS barrio_actividad,
+            p.nombre AS parque,
+            ta.nombre AS tipo_actividad
+        {_ASISTENCIAS_JOIN_BASE}
+        """
+        cur.execute(query)
+        columns = [desc[0] for desc in cur.description]
+        results = [dict(zip(columns, row)) for row in cur.fetchall()]
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener opciones de filtro: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/asistencias/resumen-filtrado")
+def obtener_resumen_filtrado_asistencias(
+    zona: str = None,
+    comuna: str = None,
+    barrio: str = None,
+    parque: str = None,
+    tipo_actividad: str = None,
+    fecha_inicio: str = None,
+    fecha_fin: str = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Totales y promedio diario por parque ya filtrados/agregados en SQL,
+    para las tarjetas y la gráfica de la página de Asistencia."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        conditions, params = _condiciones_filtro_asistencias(
+            zona, comuna, barrio, parque, tipo_actividad, fecha_inicio, fecha_fin
+        )
+        where_extra = (" AND " + " AND ".join(conditions)) if conditions else ""
+
+        query_totales = f"""
+        SELECT COUNT(a.id) AS total_asistencias, COUNT(DISTINCT p.nombre) AS parques_con_asistencia
+        {_ASISTENCIAS_JOIN_BASE}{where_extra}
+        """
+        cur.execute(query_totales, params)
+        columns = [desc[0] for desc in cur.description]
+        totales = dict(zip(columns, cur.fetchone()))
+
+        query_promedio = f"""
+        SELECT p.nombre AS parque,
+               COUNT(a.id)::float / COUNT(DISTINCT a.fecha) AS promedio
+        {_ASISTENCIAS_JOIN_BASE}{where_extra}
+        GROUP BY p.nombre
+        ORDER BY promedio DESC
+        """
+        cur.execute(query_promedio, params)
+        columns = [desc[0] for desc in cur.description]
+        promedio_por_parque = [dict(zip(columns, row)) for row in cur.fetchall()]
+
+        return {
+            "total_asistencias": totales["total_asistencias"] or 0,
+            "parques_con_asistencia": totales["parques_con_asistencia"] or 0,
+            "promedio_por_parque": promedio_por_parque,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener el resumen filtrado: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
 @app.get("/actividades/mis-actividades")
 def obtener_mis_actividades(current_user: dict = Depends(get_current_user)):
     conn = get_connection()
