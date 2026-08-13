@@ -230,7 +230,7 @@ def obtener_resumen_filtrado_asistencias(
 
         query_promedio = f"""
         SELECT p.nombre AS parque,
-               COUNT(a.id)::float / COUNT(DISTINCT a.fecha) AS promedio
+               ROUND(COUNT(a.id)::numeric / COUNT(DISTINCT a.fecha), 1) AS promedio
         {_ASISTENCIAS_JOIN_BASE}{where_extra}
         GROUP BY p.nombre
         ORDER BY promedio DESC
@@ -776,6 +776,8 @@ def reporte_asistencia_camiseta(
             dg.phone_number AS telefono,
             dg.address AS direccion,
             dg.gender::text AS sexo,
+            dg.discapacidad AS discapacidad,
+            dg.etnia AS etnia,
             p.nombre AS parque_mas_frecuente,
             TO_CHAR(af.fecha, 'YYYY-MM') AS mes,
             COUNT(af.id) AS asistencias_mes
@@ -783,7 +785,7 @@ def reporte_asistencia_camiseta(
         JOIN public.datos_generales dg ON dg.document_number = af.documento
         LEFT JOIN parque_top pt ON pt.documento = af.documento AND pt.rn = 1
         LEFT JOIN public.parque p ON p.id = pt."parqueId"
-        GROUP BY dg.first_name, dg.document_number, dg.phone_number, dg.address, dg.gender, p.nombre, TO_CHAR(af.fecha, 'YYYY-MM')
+        GROUP BY dg.first_name, dg.document_number, dg.phone_number, dg.address, dg.gender, dg.discapacidad, dg.etnia, p.nombre, TO_CHAR(af.fecha, 'YYYY-MM')
         ORDER BY dg.document_number, mes
         """
 
@@ -798,6 +800,8 @@ def reporte_asistencia_camiseta(
                 ("Teléfono", "telefono"),
                 ("Dirección", "direccion"),
                 ("Sexo", "sexo"),
+                ("Discapacidad", "discapacidad"),
+                ("Etnia", "etnia"),
                 ("Parque Más Frecuente", "parque_mas_frecuente"),
                 ("Mes", "mes"),
                 ("Asistencias en el Mes", "asistencias_mes"),
