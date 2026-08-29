@@ -735,6 +735,12 @@ def reporte_consentimiento_excel(
 ):
     return reporte_consentimiento(fecha_inicio, fecha_fin, "excel", current_user)
 
+# tipo_actividad "Entrega de Camisetas": quien tiene asistencia registrada a alguna
+# actividad de este tipo (hay varias, una por jornada de entrega) fue a quien se le
+# entregó camiseta. Es un estado histórico de la persona, independiente del rango de
+# fecha que se use para filtrar el resto del reporte.
+TIPO_ACTIVIDAD_ENTREGA_CAMISETAS_ID = "39607979-1e2d-4dd5-88b8-3abddaee3e62"
+
 @app.get("/reportes/asistencia-camiseta")
 def reporte_asistencia_camiseta(
     fecha_inicio: str = None,
@@ -757,6 +763,7 @@ def reporte_asistencia_camiseta(
         conditions, params = _condiciones_fecha("a.fecha", fecha_inicio, fecha_fin)
         if conditions:
             subquery_asistencias += " AND " + " AND ".join(conditions)
+        params.append(TIPO_ACTIVIDAD_ENTREGA_CAMISETAS_ID)
 
         query = f"""
         WITH asistencias_filtradas AS (
@@ -769,6 +776,12 @@ def reporte_asistencia_camiseta(
                    ) AS rn
             FROM asistencias_filtradas
             GROUP BY documento, "parqueId"
+        ),
+        personas_con_camiseta AS (
+            SELECT DISTINCT a.documento
+            FROM public.asistencia a
+            JOIN public.actividade act ON act.id = a."actividadId"
+            WHERE act."tipoActividadId" = %s
         )
         SELECT
             dg.first_name AS nombre,
@@ -780,12 +793,14 @@ def reporte_asistencia_camiseta(
             dg.etnia AS etnia,
             p.nombre AS parque_mas_frecuente,
             TO_CHAR(af.fecha, 'YYYY-MM') AS mes,
-            COUNT(af.id) AS asistencias_mes
+            COUNT(af.id) AS asistencias_mes,
+            (pcc.documento IS NOT NULL) AS camiseta_entregada
         FROM asistencias_filtradas af
         JOIN public.datos_generales dg ON dg.document_number = af.documento
         LEFT JOIN parque_top pt ON pt.documento = af.documento AND pt.rn = 1
         LEFT JOIN public.parque p ON p.id = pt."parqueId"
-        GROUP BY dg.first_name, dg.document_number, dg.phone_number, dg.address, dg.gender, dg.discapacidad, dg.etnia, p.nombre, TO_CHAR(af.fecha, 'YYYY-MM')
+        LEFT JOIN personas_con_camiseta pcc ON pcc.documento = af.documento
+        GROUP BY dg.first_name, dg.document_number, dg.phone_number, dg.address, dg.gender, dg.discapacidad, dg.etnia, p.nombre, TO_CHAR(af.fecha, 'YYYY-MM'), pcc.documento
         ORDER BY dg.document_number, mes
         """
 
@@ -794,6 +809,8 @@ def reporte_asistencia_camiseta(
         results = [dict(zip(columns, row)) for row in cur.fetchall()]
 
         if formato == "excel":
+            for r in results:
+                r["camiseta_entregada"] = "Sí" if r["camiseta_entregada"] else "No"
             columnas_excel = [
                 ("Nombre", "nombre"),
                 ("Documento", "documento"),
@@ -805,6 +822,7 @@ def reporte_asistencia_camiseta(
                 ("Parque Más Frecuente", "parque_mas_frecuente"),
                 ("Mes", "mes"),
                 ("Asistencias en el Mes", "asistencias_mes"),
+                ("Camiseta Entregada", "camiseta_entregada"),
             ]
             return generar_excel_response(results, columnas_excel, "ReporteAsistenciaCamiseta.xlsx")
 
